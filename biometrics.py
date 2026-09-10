@@ -25,8 +25,10 @@ def load_image_bytes(image_data: bytes) -> Optional[Image.Image]:
 
 def rotate_image(image_data: bytes, rotation_degrees: int = 90) -> bytes:
     """
-    Rotates image by 0, 90, 180, or 270 degrees.
-    90 degrees rotates counter-clockwise (positioning sideways phone streams upright).
+    Rotates image for mobile phone streams.
+    DroidCam phone streams held vertically output landscape video (rotated 90° Clockwise).
+    In PIL, Image.Transpose.ROTATE_270 corresponds to 90° Clockwise rotation,
+    rendering vertical phone streams 100% upright.
     """
     if rotation_degrees == 0:
         return image_data
@@ -34,11 +36,11 @@ def rotate_image(image_data: bytes, rotation_degrees: int = 90) -> bytes:
     if img is None:
         return image_data
     if rotation_degrees == 90:
-        img = img.transpose(Image.Transpose.ROTATE_90)
+        img = img.transpose(Image.Transpose.ROTATE_270)
     elif rotation_degrees == 180:
         img = img.transpose(Image.Transpose.ROTATE_180)
     elif rotation_degrees == 270:
-        img = img.transpose(Image.Transpose.ROTATE_270)
+        img = img.transpose(Image.Transpose.ROTATE_90)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=95)

@@ -133,7 +133,7 @@ def analyze_student_roadmap(
     # -------------------------------------------------------------
     if has_mid_1 and not has_mid_2:
         condition_type = "MID_1_ONLY"
-        condition_badge = "⚡ Retrospective Remedial Recovery Mode (Mid-1 Completed Only)"
+        condition_badge = "Retrospective Remedial Recovery Mode (Mid-1 Completed Only)"
         condition_summary = (
             f"Only Mid-1 assessment evaluated ({mid_1:.1f}/30). "
             f"Activating retroactive diagnostic remediation focusing on foundation Modules 1 & 2."
@@ -169,7 +169,7 @@ def analyze_student_roadmap(
                 f"Maintain your momentum with targeted practice. Target >= 26.0/30 in Mid-2 for an 'S' grade trajectory."
             )
 
-        strategy_header = "🛠️ Retrospective Remedial Recovery Plan"
+        strategy_header = "Retrospective Remedial Recovery Plan"
         strategy_points = [
             f"Remediate weak topics in Module 1: {', '.join(active_modules[0]['scope_topics'][:2])}.",
             f"Deepen structural mastery in Module 2: {', '.join(active_modules[1]['scope_topics'][:2])}.",
@@ -182,7 +182,7 @@ def analyze_student_roadmap(
     # -------------------------------------------------------------
     elif has_mid_1 and has_mid_2:
         condition_type = "MID_1_AND_2_COMPLETED"
-        condition_badge = "🚀 Comparative Trend Analysis & Forward-Looking Prep for Finals (Mid-1 & Mid-2 Completed)"
+        condition_badge = "Comparative Trend Analysis & Forward-Looking Prep for Finals (Mid-1 & Mid-2 Completed)"
         condition_summary = (
             f"Both internal mid-terms completed (Mid-1: {mid_1:.1f}/30, Mid-2: {mid_2:.1f}/30). "
             f"Internal marks accumulated: {(mid_1 + mid_2 + (assignment or 0.0)):.1f}/100."
@@ -191,15 +191,15 @@ def analyze_student_roadmap(
         # Delta & Velocity calculation
         delta = mid_2 - mid_1
         if delta > 1.0:
-            trend_label = f"📈 Positive Growth (+{delta:.1f} pts)"
+            trend_label = f"Positive Growth (+{delta:.1f} pts)"
             trend_desc = f"Great upward velocity! You gained +{delta:.1f} marks from Mid-1 to Mid-2, indicating strong adaptation to advanced topics."
             trend_color = "green"
         elif delta < -1.0:
-            trend_label = f"📉 Performance Dip ({delta:.1f} pts)"
+            trend_label = f"Performance Dip ({delta:.1f} pts)"
             trend_desc = f"Score dropped by {abs(delta):.1f} marks in Mid-2. Module 3 & 4 topics require urgent reinforcement before final exams."
             trend_color = "red"
         else:
-            trend_label = "⚖️ Steady Consistency (±1.0 pts)"
+            trend_label = "Steady Consistency (±1.0 pts)"
             trend_desc = "High consistency across both internal assessments. Ready to advance to comprehensive final review."
             trend_color = "blue"
 
@@ -219,7 +219,7 @@ def analyze_student_roadmap(
             f"Finals (FAT) carries heavy weightage on Modules 3, 4 & 5 (total {sum(m['exam_weightage'] for m in all_modules if m['module_id'] >= 3)} marks)."
         )
 
-        strategy_header = "🎯 Forward-Looking Final Exam (FAT) Strategic Roadmap"
+        strategy_header = "Forward-Looking Final Exam (FAT) Strategic Roadmap"
         strategy_points = [
             "Heavy Focus on High-Weightage Modules: Prioritize Modules 3, 4 & 5 (60-70% of final paper).",
             "Synthesize Cross-Module Integration: Practice problems combining Module 2 architecture with Module 4 scalability.",
@@ -232,14 +232,14 @@ def analyze_student_roadmap(
     # -------------------------------------------------------------
     else:
         condition_type = "PRE_MID_1"
-        condition_badge = "📅 Pre-Assessment Onboarding (Mid-1 Prep)"
+        condition_badge = "Pre-Assessment Onboarding (Mid-1 Prep)"
         condition_summary = "Assessments have not yet commenced. Prepare foundation Modules 1 & 2."
         active_modules = [m for m in all_modules if m["module_id"] in (1, 2)]
         scope_pct = round((len(active_modules) / total_curriculum_modules) * 100, 1)
         exam_weightage = sum(m["exam_weightage"] for m in active_modules)
         diagnosis = "Get ahead early by mastering early lecture concepts."
         recovery_target = "Target 28+/30 in Mid-1 to establish an elite semester baseline."
-        strategy_header = "📚 Foundation Study Roadmap"
+        strategy_header = "Foundation Study Roadmap"
         strategy_points = [
             "Review lecture notes for Module 1.",
             "Clarify key terminology and definitions.",
