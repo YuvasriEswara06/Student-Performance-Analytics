@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: student_portal_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: portal_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema_postgresql.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d portal_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: student_portal_app
+    restart: always
+    ports:
+      - "8501:8501"
+    environment:
+      AWS_ENABLED: "false"
+      AWS_REGION: "ap-south-1"
+      RDS_DATABASE_URL: "postgresql://postgres:postgrespassword@postgres:5432/portal_db"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

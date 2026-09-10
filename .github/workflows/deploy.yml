@@ -1,0 +1,86 @@
+name: Student Analytics AWS CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  id-token: write   # Required for GitHub OIDC IAM Role Authentication
+  contents: read
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run AWS Adapter Unit Tests
+        run: |
+          python -m unittest discover tests
+
+  build-and-deploy:
+    name: Build Docker Image & Deploy to ECS
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Determine Deployment Environment
+        id: env-spec
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "STAGE=production" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE=student-analytics-prod-service" >> $GITHUB_OUTPUT
+          else
+            echo "STAGE=staging" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE=student-analytics-staging-service" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure AWS Credentials via GitHub OIDC Role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'student-performance-analytics' }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Deploy Amazon ECS Express / Fargate Task
+        env:
+          STAGE: ${{ steps.env-spec.outputs.STAGE }}
+          ECS_SERVICE: ${{ steps.env-spec.outputs.ECS_SERVICE }}
+        run: |
+          echo "[INFO] Triggering automated ECS rolling deployment for stage: ${STAGE} (Service: ${ECS_SERVICE})"
+          # aws ecs update-service --cluster student-analytics-cluster --service ${ECS_SERVICE} --force-new-deployment

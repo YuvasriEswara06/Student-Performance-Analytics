@@ -1,0 +1,17 @@
+# .dockerignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.ds_store
+.vscode/
+.idea/
+portal.db
+tests/
+.env
+.github/
+README.md
