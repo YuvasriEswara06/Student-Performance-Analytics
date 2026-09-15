@@ -15,11 +15,15 @@ from aws_integration import AWSCloudAdapters
 class TestAWSAdapters(unittest.TestCase):
 
     def test_aws_config_disabled(self):
-        """Verifies AWS configuration defaults to AWS_ENABLED=False and ap-south-1 region."""
+        """Verifies AWS configuration defaults to AWS_ENABLED=False and ap-south-2 region."""
         with patch.dict(os.environ, {"AWS_ENABLED": "false"}, clear=True):
             config = aws_config.get_aws_config()
             self.assertFalse(config["aws_enabled"])
-            self.assertEqual(config["aws_region"], "ap-south-1")
+            self.assertEqual(config["aws_region"], "ap-south-2")
+            self.assertEqual(config["s3_bucket"], "student-performance-analytics-2026-2933")
+            self.assertEqual(config["dynamodb_table"], "StudentAttendanceEvents")
+            self.assertIn("openai.gpt-5.6-luna", config["bedrock_model_id"])
+            self.assertEqual(config["iot_region"], "ap-south-1")
             
             # validate_aws_config should pass silently when disabled
             aws_config.validate_aws_config(config)
@@ -31,22 +35,21 @@ class TestAWSAdapters(unittest.TestCase):
             self.assertEqual(result["policy_decision"], "DISABLED")
 
     def test_aws_config_enabled_missing_model(self):
-        """Verifies validate_aws_config raises ValueError if BEDROCK_MODEL_ID is omitted when enabled."""
-        with patch.dict(os.environ, {"AWS_ENABLED": "true", "AWS_REGION": "ap-south-1", "BEDROCK_MODEL_ID": ""}):
+        """Verifies validate_aws_config passes when default BEDROCK_MODEL_ID is set."""
+        with patch.dict(os.environ, {"AWS_ENABLED": "true", "AWS_REGION": "ap-south-2"}):
             config = aws_config.get_aws_config()
             self.assertTrue(config["aws_enabled"])
-            with self.assertRaises(ValueError) as ctx:
-                aws_config.validate_aws_config(config)
-            self.assertIn("BEDROCK_MODEL_ID environment variable is required", str(ctx.exception))
+            self.assertIn("openai.gpt-5.6-luna", config["bedrock_model_id"])
+            aws_config.validate_aws_config(config)
 
     def test_rekognition_adapter_policy(self):
         """Tests search_student_face verification policy thresholds (MATCH, REVIEW, REJECT)."""
         config = {
             "aws_enabled": True,
-            "aws_region": "ap-south-1",
-            "s3_bucket": "test-bucket",
+            "aws_region": "ap-south-2",
+            "s3_bucket": "student-performance-analytics-2026-2933",
             "rekognition_collection": "TestCollection",
-            "bedrock_model_id": "amazon.nova-pro-v1:0",
+            "bedrock_model_id": "arn:aws:bedrock:ap-south-2:008485359374:inference-profile/global.openai.gpt-5.6-luna",
             "iot_endpoint": "",
             "iot_topic": "test/topic",
             "rds_database_url": ""
@@ -89,69 +92,86 @@ class TestAWSAdapters(unittest.TestCase):
             self.assertEqual(res["policy_decision"], "REJECT")
 
     def test_bedrock_payload_contract(self):
-        """Verifies invoke_study_assistant formats bedrock payload correctly and calls model."""
+        """Verifies invoke_study_assistant formats bedrock converse payload correctly for global.openai.gpt-5.6-luna."""
         config = {
             "aws_enabled": True,
-            "aws_region": "ap-south-1",
-            "s3_bucket": "test-bucket",
+            "aws_region": "ap-south-2",
+            "s3_bucket": "student-performance-analytics-2026-2933",
             "rekognition_collection": "TestCollection",
-            "bedrock_model_id": "amazon.nova-pro-v1:0",
+            "bedrock_model_id": "arn:aws:bedrock:ap-south-2:008485359374:inference-profile/global.openai.gpt-5.6-luna",
             "iot_endpoint": "",
             "iot_topic": "test/topic",
             "rds_database_url": ""
         }
         adapter = AWSCloudAdapters(config)
 
-        mock_bedrock = MagicMock()
-        mock_bedrock.list_foundation_models.return_value = {
-            "modelSummaries": [{"modelId": "amazon.nova-pro-v1:0"}]
+        mock_bedrock_runtime = MagicMock()
+        mock_bedrock_runtime.converse.return_value = {
+            "output": {"message": {"content": [{"text": "Strategic roadmap for DBMS"}]}}
         }
 
-        mock_bedrock_runtime = MagicMock()
-        mock_response_body = MagicMock()
-        mock_response_body.read.return_value = b'{"strategy_header": "Focus on Calculus", "diagnosis": "Low score in Midterm", "recovery_target": "85%", "actionable_steps": ["Review Integration"]}'
-        mock_bedrock_runtime.invoke_model.return_value = {"body": mock_response_body}
-
-        def mock_client_factory(service_name):
-            if service_name == "bedrock":
-                return mock_bedrock
-            elif service_name == "bedrock-runtime":
-                return mock_bedrock_runtime
-            return MagicMock()
-
-        with patch.object(adapter, "_get_boto3_client", side_effect=mock_client_factory):
+        with patch.object(adapter, "_get_boto3_client", return_value=mock_bedrock_runtime):
             context = {"student_id": "STU001", "cgpa": 8.4, "attendance_pct": 92.0}
             res = adapter.invoke_study_assistant(context)
             self.assertEqual(res["status"], "SUCCESS")
-            self.assertIn("pedagogical_output", res)
-            self.assertEqual(res["pedagogical_output"]["strategy_header"], "Focus on Calculus")
+            self.assertIn("text", res)
+            self.assertEqual(res["text"], "Strategic roadmap for DBMS")
 
-    def test_iot_event_idempotency(self):
-        """Verifies publish_attendance_event publishes structured JSON event with verification_id as event_id."""
+    def test_multi_service_attendance_event(self):
+        """Verifies publish_attendance_verification_event dispatches to IoT, DynamoDB, S3, and SNS."""
         config = {
             "aws_enabled": True,
-            "aws_region": "ap-south-1",
-            "s3_bucket": "test-bucket",
-            "rekognition_collection": "TestCollection",
-            "bedrock_model_id": "amazon.nova-pro-v1:0",
-            "iot_endpoint": "",
+            "aws_region": "ap-south-2",
+            "s3_bucket": "student-performance-analytics-2026-2933",
+            "s3_region": "ap-south-2",
+            "dynamodb_table": "StudentAttendanceEvents",
+            "dynamodb_region": "ap-south-2",
+            "sns_topic_name": "StudentAttendanceNotifications",
+            "sns_topic_arn": "arn:aws:sns:ap-south-2:123456789012:StudentAttendanceNotifications",
+            "sns_region": "ap-south-2",
             "iot_topic": "university/classroom/attendance",
-            "rds_database_url": ""
+            "iot_region": "ap-south-1",
+            "bedrock_model_id": "in.openai.gpt-5.6-luna",
+            "bedrock_region": "ap-south-2"
         }
         adapter = AWSCloudAdapters(config)
 
+        mock_s3 = MagicMock()
         mock_iot = MagicMock()
-        with patch.object(adapter, "_get_boto3_client", return_value=mock_iot):
-            res = adapter.publish_attendance_event(
+        mock_dynamodb = MagicMock()
+        mock_sns = MagicMock()
+
+        def mock_client_factory(service_name, **kwargs):
+            if service_name == "s3":
+                return mock_s3
+            elif service_name == "iot-data":
+                return mock_iot
+            elif service_name == "dynamodb":
+                return mock_dynamodb
+            elif service_name == "sns":
+                return mock_sns
+            return MagicMock()
+
+        with patch.object(adapter, "_get_boto3_client", side_effect=mock_client_factory):
+            res = adapter.publish_attendance_verification_event(
                 student_id="STU001",
-                course_code="CS101",
-                verification_status="VERIFIED",
-                verification_id="VERIF-12345678"
+                course_code="CSE3002",
+                verification_status="MATCH",
+                confidence_pct=99.4,
+                image_bytes=b"sample_jpeg_bytes",
+                verification_id="VERIF-TEST123456"
             )
             self.assertEqual(res["status"], "SUCCESS")
-            self.assertEqual(res["event_payload"]["event_id"], "VERIF-12345678")
-            self.assertEqual(res["event_payload"]["student_id"], "STU001")
+            self.assertEqual(res["event_payload"]["event_id"], "VERIF-TEST123456")
+            self.assertEqual(res["results"]["s3"], "SUCCESS")
+            self.assertEqual(res["results"]["iot"], "SUCCESS")
+            self.assertEqual(res["results"]["dynamodb"], "SUCCESS")
+            self.assertEqual(res["results"]["sns"], "SUCCESS")
+
+            mock_s3.put_object.assert_called_once()
             mock_iot.publish.assert_called_once()
+            mock_dynamodb.put_item.assert_called_once()
+            mock_sns.publish.assert_called_once()
 
 
 if __name__ == "__main__":

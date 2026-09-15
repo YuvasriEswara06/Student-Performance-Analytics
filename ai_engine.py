@@ -26,23 +26,22 @@ except ImportError:
 
 def get_bedrock_client():
     """
-    Initializes and returns an Amazon Bedrock runtime client if AWS credentials
-    and region are configured in the environment. Returns None if unconfigured.
+    Initializes and returns an Amazon Bedrock runtime client if AWS_ENABLED is True.
+    Returns None if unconfigured or AWS_ENABLED=false.
     """
     if not BOTO3_AVAILABLE:
         return None
 
-    aws_region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
-    aws_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-
-    if not (aws_region and aws_access_key and aws_secret_key):
-        return None
-
     try:
+        import aws_config
+        config = aws_config.get_aws_config()
+        if not config["aws_enabled"]:
+            return None
+
+        bedrock_region = config.get("bedrock_region", "ap-south-2")
         client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=aws_region
+            region_name=bedrock_region
         )
         return client
     except Exception as exc:
@@ -60,14 +59,19 @@ def generate_bedrock_roadmap(
     assignment: Optional[float]
 ) -> Optional[str]:
     """
-    Invokes Amazon Bedrock (Anthropic Claude 3 Haiku or Amazon Titan) if credentials exist.
+    Invokes Amazon Bedrock (GPT-5.6 Luna in ap-south-2 or configured model) if AWS_ENABLED=true.
     Returns None when unconfigured so caller immediately uses the local fallback engine.
     """
     client = get_bedrock_client()
     if not client:
         return None
 
-    prompt = f"""You are an elite academic tutor advising {student_name} on {course_code}: {course_title}.
+    try:
+        import aws_config
+        config = aws_config.get_aws_config()
+        model_id = config.get("bedrock_model_id", "in.openai.gpt-5.6-luna")
+
+        prompt = f"""You are an elite academic tutor advising {student_name} on {course_code}: {course_title}.
 Current Status: {condition}.
 Mid-1 Score: {mid_1}/30.
 Mid-2 Score: {mid_2 if mid_2 is not None else 'Not Completed'}/30.
@@ -79,22 +83,46 @@ Generate a structured study roadmap with:
 3. Week-by-Week Action Items
 """
 
-    try:
-        # Anthropic Claude 3 Haiku payload structure
-        body = json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1000,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.4
-        })
-        response = client.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",
-            body=body,
-            contentType="application/json",
-            accept="application/json"
-        )
-        response_body = json.loads(response.get("body").read())
-        return response_body["content"][0]["text"]
+        # Try Converse API first
+        try:
+            response = client.converse(
+                modelId=model_id,
+                messages=[{
+                    "role": "user",
+                    "content": [{"text": prompt}]
+                }]
+            )
+            return response["output"]["message"]["content"][0]["text"]
+        except Exception:
+            # Fallback to invoke_model API
+            if "gpt" in model_id.lower() or "openai" in model_id.lower():
+                body = json.dumps({
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1000,
+                    "temperature": 0.4
+                })
+            else:
+                body = json.dumps({
+                    "prompt": prompt,
+                    "max_tokens_to_sample": 1000,
+                    "temperature": 0.4
+                })
+
+            response = client.invoke_model(
+                modelId=model_id,
+                body=body,
+                contentType="application/json",
+                accept="application/json"
+            )
+            response_body = json.loads(response.get("body").read().decode("utf-8"))
+
+            if "choices" in response_body:
+                return response_body["choices"][0]["message"]["content"]
+            elif "content" in response_body and isinstance(response_body["content"], list):
+                return response_body["content"][0].get("text")
+            elif "completion" in response_body:
+                return response_body["completion"]
+            return json.dumps(response_body)
     except Exception as exc:
         logger.info(f"Bedrock invocation bypassed (using local fallback engine): {exc}")
         return None

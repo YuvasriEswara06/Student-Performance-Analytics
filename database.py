@@ -517,6 +517,19 @@ def update_student_photo(student_id: str, photo_bytes: bytes) -> bool:
     cursor.execute("UPDATE students SET photo_data = ? WHERE student_id = ?", (photo_b64, student_id))
     conn.commit()
     conn.close()
+
+    # AWS Cloud S3 Hook
+    try:
+        import aws_config
+        import aws_integration
+        cfg = aws_config.get_aws_config()
+        if cfg.get("aws_enabled"):
+            adapters = aws_integration.AWSCloudAdapters(cfg)
+            adapters.upload_reference_photo(student_id, photo_bytes)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"AWS photo upload bypassed: {exc}")
+
     return True
 
 
@@ -722,7 +735,8 @@ def record_face_match_attendance(
     student_id: str,
     course_code: str,
     device_name: str = "IoT Edge Biometric Node",
-    confidence_pct: float = 99.4
+    confidence_pct: float = 99.4,
+    image_bytes: Optional[bytes] = None
 ) -> Dict[str, Any]:
     """Records confirmed biometric attendance incrementing applicable & attended."""
     conn = get_db_connection()
@@ -769,6 +783,44 @@ def record_face_match_attendance(
     )
     updated = cursor.fetchone()
     conn.close()
+
+    # AWS Multi-Service Attendance Event Hook (IoT Core, DynamoDB, S3, SNS)
+    try:
+        import aws_config
+        import aws_integration
+        cfg = aws_config.get_aws_config()
+        if cfg.get("aws_enabled"):
+            adapters = aws_integration.AWSCloudAdapters(cfg)
+            photo_payload = image_bytes or get_student_photo_bytes(student_id)
+            adapters.publish_attendance_verification_event(
+                student_id=student_id,
+                course_code=course_code,
+                verification_status="MATCH",
+                confidence_pct=confidence_pct,
+                image_bytes=photo_payload
+            )
+
+            # Check < 75% Attendance Threshold Deficit Alert
+            attended = updated["classes_attended"] if updated else 0
+            applicable = updated["classes_applicable"] if updated else 1
+            att_pct = (attended / applicable) * 100.0 if applicable > 0 else 100.0
+
+            if att_pct < 75.0:
+                sns_sub = f"CRITICAL ALERT: Student {student_id} Attendance Deficit ({att_pct:.1f}%)"
+                sns_msg = (
+                    f"ATTENDANCE DEFICIT NOTICE:\n"
+                    f"- Student ID: {student_id}\n"
+                    f"- Course Code: {course_code}\n"
+                    f"- Current Attendance: {att_pct:.1f}% (Below 75.0% Mandatory Target)\n"
+                    f"- Classes Attended: {attended} of {applicable}\n"
+                    f"- Status: CRITICAL DEFICIT\n"
+                    f"- Timestamp: {date_str} {time_str}\n\n"
+                    f"Action Required: Student must attend upcoming lectures immediately to reach 75.0% compliance."
+                )
+                adapters.publish_sns_alert(sns_sub, sns_msg)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"AWS attendance event dispatch bypassed: {exc}")
 
     return {
         "student_id": student_id,

@@ -935,7 +935,8 @@ elif selected_nav == "Course Attendance Register":
                                     student["student_id"],
                                     target_course_code,
                                     device_name=f"IoT Phone Camera ({droid_ip}:{droid_port})",
-                                    confidence_pct=conf
+                                    confidence_pct=conf,
+                                    image_bytes=portrait_live_bytes
                                 )
                                 st.success(f"Biometric Verification Confirmed ({conf:.1f}%). Attendance recorded for {result['course_code']} (Attended: {result['attended']}/{result['total']}).")
                                 st.rerun()
@@ -962,13 +963,25 @@ elif selected_nav == "Course Attendance Register":
                     conf = match_result["confidence_pct"]
                     if match_result["is_match"]:
                         if st.button("Confirm & Commit Biometric Attendance", type="primary", use_container_width=True):
-                            result = database.record_face_match_attendance(student["student_id"], target_course_code, device_name="IoT In-Browser Camera Node", confidence_pct=conf)
+                            result = database.record_face_match_attendance(
+                                student["student_id"],
+                                target_course_code,
+                                device_name="IoT In-Browser Camera Node",
+                                confidence_pct=conf,
+                                image_bytes=portrait_live_bytes
+                            )
                             st.success(f"Biometric verification confirmed for {result['course_code']}.")
                             st.rerun()
 
             else:
                 if st.button("Trigger Biometric Verification", type="primary", use_container_width=True, key="btn_sim_face"):
-                    result = database.record_face_match_attendance(student["student_id"], target_course_code, device_name="IoT Edge Sensor Node #01", confidence_pct=99.4)
+                    result = database.record_face_match_attendance(
+                        student["student_id"],
+                        target_course_code,
+                        device_name="IoT Edge Sensor Node #01",
+                        confidence_pct=99.4,
+                        image_bytes=student_photo_bytes
+                    )
                     st.success(f"Biometric verification confirmed for {result['course_code']} (Attended: {result['attended']}/{result['total']}).")
                     st.rerun()
 
