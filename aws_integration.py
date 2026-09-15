@@ -181,7 +181,7 @@ class AWSCloudAdapters:
     def invoke_study_assistant(self, student_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Invokes Amazon Bedrock LLM with structured academic context.
-        Uses converse API for global.openai.gpt-5.6-luna or configured Bedrock model.
+        Uses converse API for amazon.nova-lite-v1:0 or configured Bedrock model.
         Returns structured pedagogical diagnosis without computing authoritative marks/attendance.
         """
         if not self.config["aws_enabled"]:

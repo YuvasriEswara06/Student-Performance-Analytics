@@ -58,8 +58,8 @@ def get_aws_config() -> Dict[str, Any]:
     iot_thing_name = os.getenv("IOT_THING_NAME", "StudentAnalyticsPortal").strip()
     iot_policy_name = os.getenv("IOT_POLICY_NAME", "StudentAnalyticsIoTPolicy").strip()
 
-    # Bedrock Pedagogical Assistant (ap-south-2 Hyderabad, in.openai.gpt-5.6-luna)
-    bedrock_model_id = os.getenv("BEDROCK_MODEL_ID", "in.openai.gpt-5.6-luna").strip()
+    # Bedrock Pedagogical Assistant (amazon.nova-lite-v1:0)
+    bedrock_model_id = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0").strip()
     bedrock_region = os.getenv("BEDROCK_REGION", aws_region).strip()
 
     rekognition_collection = os.getenv("REKOGNITION_COLLECTION", "StudentBiometricCollection").strip()

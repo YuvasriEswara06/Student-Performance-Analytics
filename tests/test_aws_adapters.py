@@ -22,7 +22,7 @@ class TestAWSAdapters(unittest.TestCase):
             self.assertEqual(config["aws_region"], "ap-south-2")
             self.assertEqual(config["s3_bucket"], "student-performance-analytics-2026-2933")
             self.assertEqual(config["dynamodb_table"], "StudentAttendanceEvents")
-            self.assertIn("openai.gpt-5.6-luna", config["bedrock_model_id"])
+            self.assertIn("nova-lite", config["bedrock_model_id"])
             self.assertEqual(config["iot_region"], "ap-south-1")
             
             # validate_aws_config should pass silently when disabled
@@ -39,7 +39,7 @@ class TestAWSAdapters(unittest.TestCase):
         with patch.dict(os.environ, {"AWS_ENABLED": "true", "AWS_REGION": "ap-south-2"}):
             config = aws_config.get_aws_config()
             self.assertTrue(config["aws_enabled"])
-            self.assertIn("openai.gpt-5.6-luna", config["bedrock_model_id"])
+            self.assertIn("nova-lite", config["bedrock_model_id"])
             aws_config.validate_aws_config(config)
 
     def test_rekognition_adapter_policy(self):

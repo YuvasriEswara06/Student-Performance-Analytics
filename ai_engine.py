@@ -69,7 +69,7 @@ def generate_bedrock_roadmap(
     try:
         import aws_config
         config = aws_config.get_aws_config()
-        model_id = config.get("bedrock_model_id", "in.openai.gpt-5.6-luna")
+        model_id = config.get("bedrock_model_id", "amazon.nova-lite-v1:0")
 
         prompt = f"""You are an elite academic tutor advising {student_name} on {course_code}: {course_title}.
 Current Status: {condition}.

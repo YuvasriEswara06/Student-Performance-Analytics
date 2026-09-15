@@ -56,7 +56,7 @@ def run_verification():
     print(f"    [*] SNS Notification      : {event_res['results']['sns']}")
 
     # 2. Bedrock LLM Test
-    print("\n[+] Testing Amazon Bedrock (ap-south-2, in.openai.gpt-5.6-luna)...")
+    print("\n[+] Testing Amazon Bedrock (ap-south-1, amazon.nova-lite-v1:0)...")
     bedrock_res = adapters.invoke_study_assistant({
         "student_id": "STU1001",
         "course_code": "CSE3002",
