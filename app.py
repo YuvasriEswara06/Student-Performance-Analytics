@@ -1099,7 +1099,13 @@ elif selected_nav == "Examinations & Internal Marks":
 # =============================================================
 elif selected_nav == "Academic Performance & Study Assistant":
     st.subheader("Academic Performance & Study Assistant")
-    st.caption("Embedded pedagogical study assistant providing structured topic roadmaps and verified active-recall practice.")
+    
+    cfg = aws_config.get_aws_config()
+    if cfg.get("aws_enabled"):
+        st.caption(f"☁️ **Active Engine:** Amazon Bedrock (`{cfg.get('bedrock_model_id', 'amazon.nova-lite-v1:0')}`) | Region: `{cfg.get('bedrock_region', 'ap-south-1')}`")
+    else:
+        st.caption("💻 **Active Engine:** Deterministic Local Pedagogical Engine (AWS Disabled)")
+
 
     courses = database.get_student_attendance(student["student_id"])
     course_opts = {f"{c['course_code']} - {c['course_title']}": c["course_code"] for c in courses}
