@@ -23,6 +23,71 @@ try:
 except ImportError:
     BOTO3_AVAILABLE = False
 
+try:
+    from huggingface_hub import InferenceClient
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
+
+
+def get_hf_client():
+    """
+    Initializes and returns a HuggingFace InferenceClient if HF_TOKEN is configured.
+    Returns None if unconfigured.
+    """
+    if not HF_HUB_AVAILABLE:
+        return None
+    try:
+        import aws_config
+        aws_config.load_dotenv()
+        token = os.getenv("HF_TOKEN")
+        if not token or token == "YOUR_HF_TOKEN_HERE":
+            return None
+        model_id = os.getenv("HF_MODEL_ID", "Qwen/Qwen2.5-72B-Instruct")
+        return InferenceClient(model=model_id, token=token)
+    except Exception as exc:
+        logger.warning(f"Could not initialize HuggingFace client: {exc}")
+        return None
+
+
+def generate_hf_quiz(topic_title: str, course_code: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Generates a dynamic AI active-recall quiz question using Hugging Face (Qwen/Qwen2.5-72B-Instruct).
+    Returns a dict with prompt, options, correct_idx, and explanation, or None on failure.
+    """
+    client = get_hf_client()
+    if not client:
+        return None
+
+    try:
+        prompt = f"""You are a university professor creating an active-recall quiz question for the topic: '{topic_title}' in course '{course_code}'.
+Create 1 high-quality multiple choice question.
+
+Return ONLY a valid JSON object matching this exact schema:
+{{
+  "prompt": "Clear question stem here...",
+  "options": ["Option A", "Option B", "Option C", "Option D"],
+  "correct_idx": 0,
+  "explanation": "Detailed pedagogical explanation..."
+}}"""
+
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+            temperature=0.3
+        )
+        content = response.choices[0].message.content.strip()
+        if "```" in content:
+            lines = content.splitlines()
+            content = "\n".join([line for line in lines if not line.strip().startswith("```")])
+        data = json.loads(content)
+        if "prompt" in data and "options" in data and "correct_idx" in data:
+            return data
+        return None
+    except Exception as exc:
+        logger.warning(f"HuggingFace quiz generation failed: {exc}")
+        return None
+
 
 def get_bedrock_client():
     """

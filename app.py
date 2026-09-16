@@ -25,6 +25,7 @@ import database
 import syllabus
 import ai_engine
 import biometrics
+import aws_config
 
 
 def fetch_droidcam_frame(ip: str = "192.168.0.3", port: int = 4747, timeout: int = 4) -> Optional[bytes]:
@@ -1101,10 +1102,13 @@ elif selected_nav == "Academic Performance & Study Assistant":
     st.subheader("Academic Performance & Study Assistant")
     
     cfg = aws_config.get_aws_config()
-    if cfg.get("aws_enabled"):
-        st.caption(f"☁️ **Active Engine:** Amazon Bedrock (`{cfg.get('bedrock_model_id', 'amazon.nova-lite-v1:0')}`) | Region: `{cfg.get('bedrock_region', 'ap-south-1')}`")
+    hf_client = ai_engine.get_hf_client()
+    if hf_client:
+        st.caption("🤖 **Active AI Engine:** Hugging Face Serverless API (`Qwen/Qwen2.5-72B-Instruct`)")
+    elif cfg.get("aws_enabled"):
+        st.caption(f"☁️ **Active AI Engine:** Amazon Bedrock (`{cfg.get('bedrock_model_id', 'amazon.nova-lite-v1:0')}`) | Region: `{cfg.get('bedrock_region', 'ap-south-1')}`")
     else:
-        st.caption("💻 **Active Engine:** Deterministic Local Pedagogical Engine (AWS Disabled)")
+        st.caption("💻 **Active AI Engine:** Deterministic Local Pedagogical Engine (AWS Disabled)")
 
 
     courses = database.get_student_attendance(student["student_id"])
@@ -1234,7 +1238,12 @@ elif selected_nav == "Academic Performance & Study Assistant":
 
     with tab_ai_quiz:
         st.markdown("### Active-Recall Practice & Mastery Verification")
-        st.caption("Interactive mini-quizzes for verified study topics to ensure conceptual mastery.")
+        
+        hf_active = (ai_engine.get_hf_client() is not None)
+        if hf_active:
+            st.success("🤖 **Hugging Face AI Engine Active** (Model: Qwen/Qwen2.5-72B-Instruct) — Dynamic AI Quiz Generation Enabled")
+        else:
+            st.caption("Interactive mini-quizzes for verified study topics to ensure conceptual mastery.")
 
         completed_tasks_list = []
         for mod in analysis["active_modules"]:
@@ -1245,18 +1254,24 @@ elif selected_nav == "Academic Performance & Study Assistant":
         if not completed_tasks_list:
             st.info("No study tasks verified yet. Switch to the 'Adaptive Study Roadmap' tab and check off completed tasks to unlock active-recall practice quizzes.")
         else:
+            if "generated_ai_quizzes" not in st.session_state:
+                st.session_state.generated_ai_quizzes = {}
+
             for task in completed_tasks_list:
                 t_id = task["task_id"]
                 t_title = task["title"]
-                q_data = syllabus.get_quiz_question_by_task_id(t_id)
+                
+                # Check if we have an AI generated quiz in session or generate static fallback
+                q_data = st.session_state.generated_ai_quizzes.get(t_id) or syllabus.get_quiz_question_by_task_id(t_id)
 
                 if q_data:
                     with st.expander(f"Quiz: {t_title} (Weightage: {task['weightage']} Marks)", expanded=True):
+                        q_source = "🤖 Hugging Face AI-Generated" if t_id in st.session_state.generated_ai_quizzes else "📚 Static Curriculum"
                         st.markdown(
                             f"""
                             <div class="quiz-container">
                                 <div style="font-weight: 700; color: #0f172a; margin-bottom: 0.3rem;">
-                                    Active-Recall Quick Check
+                                    Active-Recall Quick Check <span style="font-size:0.8rem; font-weight:400; color:#64748b;">({q_source})</span>
                                 </div>
                                 <div style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
                                     <strong>Question:</strong> {q_data['prompt']}
@@ -1265,6 +1280,15 @@ elif selected_nav == "Academic Performance & Study Assistant":
                             """,
                             unsafe_allow_html=True
                         )
+
+                        if hf_active:
+                            if st.button(f"✨ Regenerate Question with Hugging Face AI", key=f"btn_regen_hf_{t_id}"):
+                                with st.spinner("Calling Hugging Face Qwen 2.5 API..."):
+                                    new_q = ai_engine.generate_hf_quiz(t_title, active_course_code)
+                                    if new_q:
+                                        st.session_state.generated_ai_quizzes[t_id] = new_q
+                                        st.success("New AI Quiz question generated successfully!")
+                                        st.rerun()
 
                         quiz_choice_key = f"quiz_choice_{t_id}"
                         quiz_choice = st.radio(
@@ -1277,7 +1301,7 @@ elif selected_nav == "Academic Performance & Study Assistant":
                             st.session_state.quiz_state[t_id] = quiz_choice
                             correct_text = q_data["options"][q_data["correct_idx"]]
                             if quiz_choice == correct_text:
-                                st.success(f"Correct Answer. +{task['weightage']} Marks Mastery Verified.\n\n*{q_data['explanation']}*")
+                                st.success(f"Correct Answer! +{task['weightage']} Marks Mastery Verified.\n\n*{q_data['explanation']}*")
                                 database.update_task_progress(student["student_id"], active_course_code, t_id, True, float(task["weightage"]))
                             else:
                                 st.error(f"Incorrect. Correct answer: **{correct_text}**.\n\n**Explanation:** {q_data['explanation']}")
