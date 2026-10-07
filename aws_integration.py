@@ -32,6 +32,9 @@ class AWSCloudAdapters:
 
         if service_name == "s3":
             region = self.config.get("s3_region", region)
+            kwargs["endpoint_url"] = f"https://s3.{region}.amazonaws.com"
+            from botocore.config import Config
+            kwargs["config"] = Config(signature_version="s3v4")
         elif service_name == "dynamodb":
             region = self.config.get("dynamodb_region", region)
         elif service_name == "sns":
@@ -423,3 +426,129 @@ class AWSCloudAdapters:
             return {"status": "SUCCESS", "message_id": response.get("MessageId")}
         except Exception as exc:
             return {"status": "ERROR", "message_id": None, "error": str(exc)}
+
+    def send_email_with_pdf_attachment(
+        self,
+        to_email: str,
+        subject: str,
+        body_text: str,
+        pdf_bytes: bytes,
+        filename: str
+    ) -> Dict[str, Any]:
+        """
+        Sends an email with the PDF file directly attached as a MIME attachment via Amazon SES.
+        """
+        if not self.config["aws_enabled"]:
+            return {"status": "SKIPPED_AWS_DISABLED"}
+
+        try:
+            import os
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.application import MIMEApplication
+
+            sender = os.getenv("SES_SENDER_EMAIL", os.getenv("NOTIFICATION_EMAIL", "yuvasrieswara77@gmail.com"))
+
+            msg = MIMEMultipart()
+            msg["Subject"] = subject
+            msg["From"] = sender
+            msg["To"] = to_email
+
+            # Add plain text body
+            msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+            # Add PDF attachment
+            pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
+            pdf_part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(pdf_part)
+
+            ses = self._get_boto3_client("ses")
+            if ses:
+                res = ses.send_raw_email(
+                    Source=sender,
+                    Destinations=[to_email],
+                    RawMessage={"Data": msg.as_string()}
+                )
+                return {"status": "SUCCESS", "message_id": res.get("MessageId")}
+            return {"status": "SKIPPED_NO_SES_CLIENT"}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def publish_proctor_quiz_notification(
+        self,
+        student_id: str,
+        student_name: str,
+        course_code: str,
+        topic: str,
+        quiz_id: str,
+        pdf_bytes: bytes,
+        recipient_email: str = "yuvasrieswara77@gmail.com"
+    ) -> Dict[str, Any]:
+        """
+        Uploads Proctor Quiz PDF to S3, generates HTTPS presigned URL, sends SNS notification,
+        and sends direct email with PDF attached via Amazon SES.
+        """
+        import os
+        s3_uri = None
+        presigned_url = None
+        s3_status = "SKIPPED_AWS_DISABLED"
+
+        if self.config["aws_enabled"]:
+            try:
+                s3 = self._get_boto3_client("s3")
+                key = f"proctor_quizzes/{student_id}_{quiz_id}.pdf"
+                s3.put_object(
+                    Bucket=self.config["s3_bucket"],
+                    Key=key,
+                    Body=pdf_bytes,
+                    ContentType="application/pdf",
+                    ContentDisposition=f"attachment; filename=Quiz_{course_code}_{quiz_id}.pdf"
+                )
+                s3_uri = f"s3://{self.config['s3_bucket']}/{key}"
+
+                # Generate HTTPS presigned download link valid for 7 days
+                presigned_url = s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.config["s3_bucket"], "Key": key},
+                    ExpiresIn=604800
+                )
+                s3_status = "SUCCESS"
+            except Exception as exc:
+                s3_status = f"ERROR: {exc}"
+
+        subject = f"Academic Quiz Assigned: {course_code} - {topic}"
+        msg = (
+            f"OFFICE OF THE ACADEMIC PROCTOR CELL — VIT UNIVERSITY\n\n"
+            f"Notification of Assigned Continuous Evaluation Quiz:\n"
+            f"• Student: {student_name} ({student_id})\n"
+            f"• Course: {course_code}\n"
+            f"• Topic: {topic}\n"
+            f"• Quiz Reference ID: {quiz_id}\n\n"
+            f"📄 CLICK TO DOWNLOAD PDF QUESTIONNAIRE:\n"
+            f"{presigned_url or s3_uri or 'Generated locally'}\n\n"
+            f"Please complete your script and submit to your Senior Proctor for manual score entry."
+        )
+
+        # 1. Send Amazon SNS Topic Alert
+        sns_res = self.publish_sns_alert(subject, msg)
+
+        # 2. Send Direct Email with PDF MIME Attachment via Amazon SES
+        pdf_filename = f"Quiz_{course_code}_{quiz_id}.pdf"
+        ses_res = self.send_email_with_pdf_attachment(
+            to_email=recipient_email,
+            subject=subject,
+            body_text=msg,
+            pdf_bytes=pdf_bytes,
+            filename=pdf_filename
+        )
+
+        return {
+            "status": "SUCCESS",
+            "s3_status": s3_status,
+            "s3_uri": s3_uri,
+            "presigned_url": presigned_url,
+            "sns_status": sns_res.get("status"),
+            "sns_message_id": sns_res.get("message_id"),
+            "ses_status": ses_res.get("status"),
+            "ses_message_id": ses_res.get("message_id")
+        }

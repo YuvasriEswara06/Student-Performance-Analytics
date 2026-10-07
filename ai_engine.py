@@ -89,6 +89,50 @@ Return ONLY a valid JSON object matching this exact schema:
         return None
 
 
+def generate_hf_10_mcq_quiz(topic_title: str, course_code: str = "", num_questions: int = 10) -> List[Dict[str, Any]]:
+    """
+    Generates a batch of multiple-choice active recall quiz questions (default: 10)
+    for a proctee evaluation using Hugging Face (Qwen/Qwen2.5-72B-Instruct).
+    """
+    client = get_hf_client()
+    if not client:
+        return []
+
+    try:
+        prompt = f"""You are a university professor creating an active-recall evaluation quiz for topic: '{topic_title}' in course '{course_code}'.
+Create EXACTLY {num_questions} high-quality multiple choice questions.
+
+Return ONLY a valid JSON array of objects matching this exact schema:
+[
+  {{
+    "q_index": 1,
+    "prompt": "Clear question stem text...",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "correct_idx": 0,
+    "explanation": "Detailed pedagogical explanation...",
+    "topic_tag": "{topic_title}"
+  }},
+  ...
+]"""
+
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=3000,
+            temperature=0.3
+        )
+        content = response.choices[0].message.content.strip()
+        if "```" in content:
+            lines = content.splitlines()
+            content = "\n".join([line for line in lines if not line.strip().startswith("```")])
+        data = json.loads(content)
+        if isinstance(data, list) and len(data) > 0:
+            return data
+        return []
+    except Exception as exc:
+        logger.warning(f"HuggingFace 10-MCQ generation failed: {exc}")
+        return []
+
+
 def get_bedrock_client():
     """
     Initializes and returns an Amazon Bedrock runtime client if AWS_ENABLED is True.

@@ -17,6 +17,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import urllib.request
+import uuid
 from typing import Dict, Any, List, Optional
 from PIL import Image
 import io
@@ -26,6 +27,8 @@ import syllabus
 import ai_engine
 import biometrics
 import aws_config
+import quiz_pdf_generator
+import aws_integration
 
 
 def fetch_droidcam_frame(ip: str = "192.168.0.3", port: int = 4747, timeout: int = 4) -> Optional[bytes]:
@@ -408,12 +411,12 @@ current_display_name = next(
     list(profile_map.keys())[0]
 )
 
-st.sidebar.markdown("**ACTIVE STUDENT PROFILE**")
+st.sidebar.markdown("**👨‍🏫 VIT PROCTOR CONSOLE**")
+st.sidebar.caption("Senior Proctor: **Dr. S. Ramakrishnan** | Cohort: 15 Proctees")
 selected_profile_name = st.sidebar.selectbox(
-    "Active Student Profile",
+    "Select Focus Proctee:",
     options=list(profile_map.keys()),
-    index=list(profile_map.keys()).index(current_display_name),
-    label_visibility="collapsed"
+    index=list(profile_map.keys()).index(current_display_name)
 )
 
 active_student_id = profile_map[selected_profile_name]
@@ -1237,72 +1240,212 @@ elif selected_nav == "Academic Performance & Study Assistant":
                         st.rerun()
 
     with tab_ai_quiz:
-        st.markdown("### Active-Recall Practice & Mastery Verification")
+        st.markdown("### Proctor AI Quiz Verification, PDF Export & Script Evaluation")
         
         hf_active = (ai_engine.get_hf_client() is not None)
         if hf_active:
-            st.success("🤖 **Hugging Face AI Engine Active** (Model: Qwen/Qwen2.5-72B-Instruct) — Dynamic AI Quiz Generation Enabled")
+            st.success("🤖 **Hugging Face AI Engine Active** (`Qwen/Qwen2.5-72B-Instruct`) — 10-MCQ Quiz Batch Generator Ready")
         else:
-            st.caption("Interactive mini-quizzes for verified study topics to ensure conceptual mastery.")
+            st.warning("⚠️ Hugging Face API Token not configured. Operating in local fallback mode.")
 
-        completed_tasks_list = []
-        for mod in analysis["active_modules"]:
-            for task in mod.get("tasks", []):
-                if task["task_id"] in completed_task_ids:
-                    completed_tasks_list.append(task)
+        sub_tab1, sub_tab2, sub_tab3 = st.tabs([
+            "✨ 10-MCQ Generator & Proctor Editor",
+            "📝 Manual Script Grading & Score Entry",
+            "📊 Proctee Weakness Analytics"
+        ])
 
-        if not completed_tasks_list:
-            st.info("No study tasks verified yet. Switch to the 'Adaptive Study Roadmap' tab and check off completed tasks to unlock active-recall practice quizzes.")
-        else:
-            if "generated_ai_quizzes" not in st.session_state:
-                st.session_state.generated_ai_quizzes = {}
+        # -------------------------------------------------------------
+        # SUB-TAB 1: 10-MCQ Hugging Face Generator & Manual Editor
+        # -------------------------------------------------------------
+        with sub_tab1:
+            st.markdown("#### Generate & Verify 10-Question Evaluation Quiz")
+            st.caption("Generate 10 structured active-recall questions using Hugging Face AI, manually edit stems or choices if needed, and export as PDF via AWS SNS Mail.")
 
-            for task in completed_tasks_list:
-                t_id = task["task_id"]
-                t_title = task["title"]
+            q_col1, q_col2 = st.columns([3, 1])
+            with q_col1:
+                topic_input = st.text_input(
+                    "Topic / Concept Scope:",
+                    value="Agile Scrum Framework & Sprint Burndown Mechanics",
+                    key="proctor_quiz_topic_input"
+                )
+            with q_col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                gen_btn = st.button("✨ Generate 10 MCQs (HF AI)", type="primary", key="btn_gen_10_mcqs")
+
+            if gen_btn:
+                with st.spinner(f"Calling Hugging Face Qwen 2.5 API to generate 10 MCQs on '{topic_input}'..."):
+                    mcqs = ai_engine.generate_hf_10_mcq_quiz(topic_input, active_course_code, num_questions=10)
+                    if mcqs:
+                        st.session_state.active_proctor_quiz = {
+                            "quiz_id": f"QUIZ-{uuid.uuid4().hex[:8].upper()}",
+                            "topic": topic_input,
+                            "questions": mcqs
+                        }
+                        st.success(f"Successfully generated {len(mcqs)} multiple-choice questions!")
+                    else:
+                        st.error("Could not generate 10 questions from Hugging Face API. Please verify HF_TOKEN or try again.")
+
+            if "active_proctor_quiz" in st.session_state and st.session_state.active_proctor_quiz:
+                quiz_meta = st.session_state.active_proctor_quiz
+                st.markdown("---")
+                st.markdown(f"### Proctor Review & Verification Form (`{quiz_meta['quiz_id']}`)")
+                st.caption("Review and edit any question stem, option choices, or correct index before exporting PDF.")
+
+                edited_questions = []
+                for idx, item in enumerate(quiz_meta["questions"], start=1):
+                    with st.expander(f"Question #{idx}: {item.get('prompt', '')[:60]}...", expanded=(idx <= 2)):
+                        e_prompt = st.text_area(f"Q{idx} Question Stem:", value=item.get("prompt", ""), key=f"e_prompt_{idx}")
+                        
+                        opts = item.get("options", ["", "", "", ""])
+                        e_opt0 = st.text_input(f"Option A:", value=opts[0] if len(opts)>0 else "", key=f"e_opt0_{idx}")
+                        e_opt1 = st.text_input(f"Option B:", value=opts[1] if len(opts)>1 else "", key=f"e_opt1_{idx}")
+                        e_opt2 = st.text_input(f"Option C:", value=opts[2] if len(opts)>2 else "", key=f"e_opt2_{idx}")
+                        e_opt3 = st.text_input(f"Option D:", value=opts[3] if len(opts)>3 else "", key=f"e_opt3_{idx}")
+
+                        c_idx = item.get("correct_idx", 0)
+                        e_correct = st.selectbox(
+                            f"Correct Choice:",
+                            options=[0, 1, 2, 3],
+                            format_func=lambda i: f"Option {['A','B','C','D'][i]}",
+                            index=c_idx if c_idx in [0,1,2,3] else 0,
+                            key=f"e_correct_{idx}"
+                        )
+                        e_exp = st.text_area(f"Pedagogical Explanation:", value=item.get("explanation", ""), key=f"e_exp_{idx}")
+
+                        edited_questions.append({
+                            "q_index": idx,
+                            "prompt": e_prompt,
+                            "options": [e_opt0, e_opt1, e_opt2, e_opt3],
+                            "correct_idx": e_correct,
+                            "explanation": e_exp,
+                            "topic_tag": quiz_meta["topic"]
+                        })
+
+                st.session_state.active_proctor_quiz["questions"] = edited_questions
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                act_col1, act_col2 = st.columns([1, 1])
+                with act_col1:
+                    if st.button("💾 Save Verified Quiz to Database", key="btn_save_proctor_quiz"):
+                        database.save_proctor_quiz(
+                            quiz_id=quiz_meta["quiz_id"],
+                            proctor_id="PR2026_SE",
+                            student_id=student["student_id"],
+                            course_code=active_course_code,
+                            topic=quiz_meta["topic"],
+                            questions=edited_questions
+                        )
+                        st.success(f"Quiz `{quiz_meta['quiz_id']}` saved to portal database!")
+
+                with act_col2:
+                    if st.button("📄 Export PDF & Send via AWS SNS Mail", key="btn_pdf_sns_quiz", type="primary"):
+                        with st.spinner("Generating PDF questionnaire and invoking Amazon SNS notification..."):
+                            pdf_bytes = quiz_pdf_generator.generate_quiz_pdf(
+                                student_name=student["name"],
+                                student_id=student["student_id"],
+                                course_code=active_course_code,
+                                topic_title=quiz_meta["topic"],
+                                quiz_id=quiz_meta["quiz_id"],
+                                questions=edited_questions
+                            )
+
+                            # Save to database
+                            database.save_proctor_quiz(
+                                quiz_id=quiz_meta["quiz_id"],
+                                proctor_id="PR2026_SE",
+                                student_id=student["student_id"],
+                                course_code=active_course_code,
+                                topic=quiz_meta["topic"],
+                                questions=edited_questions,
+                                pdf_url=f"s3://student-performance-analytics-2026-2933/proctor_quizzes/{student['student_id']}_{quiz_meta['quiz_id']}.pdf"
+                            )
+
+                            # AWS SNS & S3 Call
+                            cloud = aws_integration.AWSCloudAdapters()
+                            sns_res = cloud.publish_proctor_quiz_notification(
+                                student_id=student["student_id"],
+                                student_name=student["name"],
+                                course_code=active_course_code,
+                                topic=quiz_meta["topic"],
+                                quiz_id=quiz_meta["quiz_id"],
+                                pdf_bytes=pdf_bytes
+                            )
+
+                            st.success(f"PDF Generated ({len(pdf_bytes)} bytes) and SNS Notification Status: {sns_res['sns_status']}")
+                            st.download_button(
+                                label="⬇️ Download Approved Assessment PDF",
+                                data=pdf_bytes,
+                                file_name=f"Quiz_{active_course_code}_{quiz_meta['quiz_id']}.pdf",
+                                mime="application/pdf",
+                                key="dl_btn_pdf_quiz"
+                            )
+
+        # -------------------------------------------------------------
+        # SUB-TAB 2: Manual Script Grading & Score Entry
+        # -------------------------------------------------------------
+        with sub_tab2:
+            st.markdown("#### Manual Proctee Script Evaluation Entry")
+            st.caption("Enter student score obtained after reviewing their submitted script for assigned quizzes.")
+
+            existing_quizzes = database.get_proctor_quizzes_for_student(student["student_id"])
+            if not existing_quizzes:
+                st.info("No proctor quizzes assigned to this student yet. Generate a quiz in Sub-Tab 1 first.")
+            else:
+                q_options = {f"{q['quiz_id']} - {q['topic']} ({q['created_at']})": q for q in existing_quizzes}
+                selected_q_label = st.selectbox("Select Assigned Quiz to Evaluate:", options=list(q_options.keys()), key="eval_quiz_sel")
+                selected_q = q_options[selected_q_label]
+
+                eval_col1, eval_col2 = st.columns([1, 1])
+                with eval_col1:
+                    score_in = st.number_input(
+                        "Score Obtained (out of 10.0):",
+                        min_value=0.0,
+                        max_value=10.0,
+                        value=selected_q.get("score_obtained") or 7.5,
+                        step=0.5,
+                        key="eval_score_input"
+                    )
+                with eval_col2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("💾 Record Evaluation Score", key="btn_record_eval_score", type="primary"):
+                        eval_id = database.record_proctor_quiz_evaluation(
+                            quiz_id=selected_q["quiz_id"],
+                            student_id=student["student_id"],
+                            score_obtained=score_in,
+                            max_score=10.0,
+                            topic_breakdown={selected_q["topic"]: score_in}
+                        )
+                        st.success(f"Evaluation record `{eval_id}` saved successfully! Score: {score_in}/10.0")
+                        st.rerun()
+
+        # -------------------------------------------------------------
+        # SUB-TAB 3: Proctee Weakness Analytics & Mastery Trends
+        # -------------------------------------------------------------
+        with sub_tab3:
+            st.markdown("#### Historical Student Weak Point & Mastery Analytics")
+            st.caption("Cumulative analysis of student performance across past quizzes to identify conceptual deficits.")
+
+            weak_data = database.get_student_weakness_analytics(student["student_id"])
+            if not weak_data["topic_summary"]:
+                st.info("No evaluated quiz records found for weakness analysis yet. Record quiz scores in Sub-Tab 2 to activate analytics.")
+            else:
+                w_df = pd.DataFrame(weak_data["topic_summary"])
                 
-                # Check if we have an AI generated quiz in session or generate static fallback
-                q_data = st.session_state.generated_ai_quizzes.get(t_id) or syllabus.get_quiz_question_by_task_id(t_id)
+                chart = alt.Chart(w_df).mark_bar().encode(
+                    x=alt.X("average_score_pct:Q", title="Average Mastery Score (%)", scale=alt.Scale(domain=[0, 100])),
+                    y=alt.Y("topic:N", title="Syllabus Topic Scope", sort="-x"),
+                    color=alt.Color(
+                        "status:N",
+                        scale=alt.Scale(
+                            domain=["CRITICAL WEAK POINT", "NEEDS REINFORCEMENT", "STRONG MASTERY"],
+                            range=["#ef4444", "#f59e0b", "#10b981"]
+                        ),
+                        title="Status Classification"
+                    ),
+                    tooltip=["topic", "attempts", "average_score_pct", "status"]
+                ).properties(height=250, title=f"Proctee Topic Mastery Profile: {student['name']}")
 
-                if q_data:
-                    with st.expander(f"Quiz: {t_title} (Weightage: {task['weightage']} Marks)", expanded=True):
-                        q_source = "🤖 Hugging Face AI-Generated" if t_id in st.session_state.generated_ai_quizzes else "📚 Static Curriculum"
-                        st.markdown(
-                            f"""
-                            <div class="quiz-container">
-                                <div style="font-weight: 700; color: #0f172a; margin-bottom: 0.3rem;">
-                                    Active-Recall Quick Check <span style="font-size:0.8rem; font-weight:400; color:#64748b;">({q_source})</span>
-                                </div>
-                                <div style="color: #334155; font-size: 0.95rem; margin-bottom: 0.8rem;">
-                                    <strong>Question:</strong> {q_data['prompt']}
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
+                st.altair_chart(chart, use_container_width=True)
 
-                        if hf_active:
-                            if st.button(f"✨ Regenerate Question with Hugging Face AI", key=f"btn_regen_hf_{t_id}"):
-                                with st.spinner("Calling Hugging Face Qwen 2.5 API..."):
-                                    new_q = ai_engine.generate_hf_quiz(t_title, active_course_code)
-                                    if new_q:
-                                        st.session_state.generated_ai_quizzes[t_id] = new_q
-                                        st.success("New AI Quiz question generated successfully!")
-                                        st.rerun()
-
-                        quiz_choice_key = f"quiz_choice_{t_id}"
-                        quiz_choice = st.radio(
-                            "Select your response:",
-                            options=q_data["options"],
-                            key=quiz_choice_key
-                        )
-
-                        if st.button(f"Submit Quiz Answer", key=f"btn_quiz_{t_id}"):
-                            st.session_state.quiz_state[t_id] = quiz_choice
-                            correct_text = q_data["options"][q_data["correct_idx"]]
-                            if quiz_choice == correct_text:
-                                st.success(f"Correct Answer! +{task['weightage']} Marks Mastery Verified.\n\n*{q_data['explanation']}*")
-                                database.update_task_progress(student["student_id"], active_course_code, t_id, True, float(task["weightage"]))
-                            else:
-                                st.error(f"Incorrect. Correct answer: **{correct_text}**.\n\n**Explanation:** {q_data['explanation']}")
-                                database.update_task_progress(student["student_id"], active_course_code, t_id, True, 0.0)
+                st.markdown("##### Detailed Weakness Summary")
+                st.dataframe(w_df, use_container_width=True)

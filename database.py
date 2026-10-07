@@ -8,6 +8,8 @@ dynamic querying, and transactional updates.
 import sqlite3
 import datetime
 import base64
+import json
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -218,6 +220,57 @@ def init_db(force_reseed: bool = False) -> None:
             quiz_score REAL,
             last_updated TEXT NOT NULL,
             UNIQUE(student_id, course_code, task_id)
+        )
+        """
+    )
+
+    # 9. Proctor Quizzes Header Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proctor_quizzes (
+            quiz_id TEXT PRIMARY KEY,
+            proctor_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            course_code TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            num_questions INTEGER NOT NULL DEFAULT 10,
+            created_at TEXT NOT NULL,
+            pdf_url TEXT,
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+        )
+        """
+    )
+
+    # 10. Proctor Quiz Items Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proctor_quiz_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quiz_id TEXT NOT NULL,
+            q_index INTEGER NOT NULL,
+            prompt TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            correct_idx INTEGER NOT NULL,
+            explanation TEXT,
+            topic_tag TEXT,
+            FOREIGN KEY (quiz_id) REFERENCES proctor_quizzes(quiz_id)
+        )
+        """
+    )
+
+    # 11. Proctor Quiz Evaluations Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proctor_quiz_evaluations (
+            eval_id TEXT PRIMARY KEY,
+            quiz_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            score_obtained REAL NOT NULL,
+            max_score REAL NOT NULL DEFAULT 10.0,
+            evaluated_at TEXT NOT NULL,
+            topic_breakdown_json TEXT,
+            FOREIGN KEY (quiz_id) REFERENCES proctor_quizzes(quiz_id),
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
         )
         """
     )
@@ -874,3 +927,134 @@ def update_task_progress(
     )
     conn.commit()
     conn.close()
+
+
+def save_proctor_quiz(
+    quiz_id: str,
+    proctor_id: str,
+    student_id: str,
+    course_code: str,
+    topic: str,
+    questions: List[Dict[str, Any]],
+    pdf_url: Optional[str] = None
+) -> None:
+    """Saves a proctor-approved 10-MCQ quiz and its items into the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute(
+        """
+        INSERT INTO proctor_quizzes (quiz_id, proctor_id, student_id, course_code, topic, num_questions, created_at, pdf_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (quiz_id, proctor_id, student_id, course_code, topic, len(questions), now_str, pdf_url)
+    )
+
+    for idx, q in enumerate(questions, start=1):
+        cursor.execute(
+            """
+            INSERT INTO proctor_quiz_items (quiz_id, q_index, prompt, options_json, correct_idx, explanation, topic_tag)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                quiz_id,
+                idx,
+                q.get("prompt", ""),
+                json.dumps(q.get("options", [])),
+                q.get("correct_idx", 0),
+                q.get("explanation", ""),
+                q.get("topic_tag", topic)
+            )
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def record_proctor_quiz_evaluation(
+    quiz_id: str,
+    student_id: str,
+    score_obtained: float,
+    max_score: float = 10.0,
+    topic_breakdown: Optional[Dict[str, Any]] = None
+) -> str:
+    """Records a proctor's manual score entry for a student's quiz script."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    eval_id = f"EVAL-{uuid.uuid4().hex[:8].upper()}"
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute(
+        """
+        INSERT INTO proctor_quiz_evaluations (eval_id, quiz_id, student_id, score_obtained, max_score, evaluated_at, topic_breakdown_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            eval_id,
+            quiz_id,
+            student_id,
+            score_obtained,
+            max_score,
+            now_str,
+            json.dumps(topic_breakdown or {})
+        )
+    )
+    conn.commit()
+    conn.close()
+    return eval_id
+
+
+def get_proctor_quizzes_for_student(student_id: str) -> List[Dict[str, Any]]:
+    """Retrieves all proctor-generated quizzes and evaluation scores for a given student."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT q.quiz_id, q.proctor_id, q.student_id, q.course_code, q.topic, q.num_questions, q.created_at, q.pdf_url,
+               e.score_obtained, e.max_score, e.evaluated_at, e.topic_breakdown_json
+        FROM proctor_quizzes q
+        LEFT JOIN proctor_quiz_evaluations e ON q.quiz_id = e.quiz_id
+        WHERE q.student_id = ?
+        ORDER BY q.created_at DESC
+        """,
+        (student_id,)
+    )
+    rows = cursor.fetchall()
+    quizzes = [dict(row) for row in rows]
+    conn.close()
+    return quizzes
+
+
+def get_student_weakness_analytics(student_id: str) -> Dict[str, Any]:
+    """
+    Analyzes historical quiz evaluations and syllabus progress to generate
+    topic-by-topic weakness and mastery metrics for the proctee.
+    """
+    quizzes = get_proctor_quizzes_for_student(student_id)
+    topic_scores: Dict[str, List[float]] = {}
+
+    for q in quizzes:
+        topic = q["topic"]
+        if topic not in topic_scores:
+            topic_scores[topic] = []
+        if q.get("score_obtained") is not None and q.get("max_score"):
+            pct = (float(q["score_obtained"]) / float(q["max_score"])) * 100.0
+            topic_scores[topic].append(pct)
+
+    topic_summary = []
+    for topic, scores in topic_scores.items():
+        avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+        status = "CRITICAL WEAK POINT" if avg_score < 60.0 else ("NEEDS REINFORCEMENT" if avg_score < 80.0 else "STRONG MASTERY")
+        topic_summary.append({
+            "topic": topic,
+            "attempts": len(scores),
+            "average_score_pct": avg_score,
+            "status": status
+        })
+
+    return {
+        "total_quizzes_evaluated": sum(1 for q in quizzes if q.get("score_obtained") is not None),
+        "topic_summary": topic_summary,
+        "recent_quizzes": quizzes[:5]
+    }
